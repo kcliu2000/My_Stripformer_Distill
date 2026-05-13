@@ -129,3 +129,36 @@ def get_loss(model):
     else:
         raise ValueError("ContentLoss [%s] not recognized." % model['content_loss'])
     return content_loss
+
+    
+class WaveletKDLoss(nn.Module):
+    def __init__(self):
+        super(WaveletKDLoss, self).__init__()
+        # 手刻 Haar Wavelet 的四個濾波器 (LL, HL, LH, HH)
+        h0 = 1.0 / 2.0
+        h1 = [h0, h0]
+        g1 = [h0, -h0]
+        
+        filter_ll = torch.tensor([[h1[0]*h1[0], h1[0]*h1[1]], [h1[1]*h1[0], h1[1]*h1[1]]])
+        filter_hl = torch.tensor([[h1[0]*g1[0], h1[0]*g1[1]], [h1[1]*g1[0], h1[1]*g1[1]]])
+        filter_lh = torch.tensor([[g1[0]*h1[0], g1[0]*h1[1]], [g1[1]*h1[0], g1[1]*h1[1]]])
+        filter_hh = torch.tensor([[g1[0]*g1[0], g1[0]*g1[1]], [g1[1]*g1[0], g1[1]*g1[1]]])
+        
+        filters = torch.stack([filter_ll, filter_hl, filter_lh, filter_hh]).unsqueeze(1)
+        self.register_buffer('filters', filters)
+        self.criterion = nn.L1Loss()
+
+    def forward(self, pred, target):
+        loss = 0
+        # 針對 RGB 三個通道分別做小波轉換並計算 L1 Loss
+        for c in range(pred.size(1)):
+            pred_c = pred[:, c:c+1, :, :]
+            target_c = target[:, c:c+1, :, :]
+            
+            # 使用 stride=2 進行下採樣頻率拆解
+            pred_wav = F.conv2d(pred_c, self.filters, stride=2)
+            target_wav = F.conv2d(target_c, self.filters, stride=2)
+            
+            loss += self.criterion(pred_wav, target_wav)
+            
+        return loss / pred.size(1)

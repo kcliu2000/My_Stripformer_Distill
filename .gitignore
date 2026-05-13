@@ -1,0 +1,28 @@
+# --- 數據與權重 (大型檔案) ---
+*.pth
+datasets/
+pretrained_models/
+final_*.pth
+best_*.pth
+last_*.pth
+
+# --- 訓練日誌與結果 ---
+wandb/
+out/
+Results/
+train_strip*.log
+*.log
+
+# --- Python 暫存與環境 ---
+__pycache__/
+models/__pycache__/
+util/__pycache__/
+*.py[cod]
+.venv
+venv/
+
+# --- 系統與編輯器 ---
+.DS_Store
+.vscode/
+.idea/
+.ipynb_checkpoints/

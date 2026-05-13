@@ -1,3 +1,5 @@
+import wandb
+import numpy as np
 import logging
 from functools import partial
 import os
@@ -14,7 +16,6 @@ from metric_counter import MetricCounter
 from models.losses import get_loss
 from models.models import get_model
 from models.networks import get_nets
-import numpy as np
 from torch.optim.lr_scheduler import CosineAnnealingLR
 cv2.setNumThreads(0)
 
@@ -84,11 +85,38 @@ class Trainer:
         for data in tq:
             inputs, targets = self.model.get_input(data)
             outputs = self.netG(inputs)
+            
+            # === 🌟 讓老師進行推論 ===
+            with torch.no_grad():
+                teacher_outputs = self.teacher_model(inputs)
+                
             self.optimizer_G.zero_grad()
-            loss_G = self.criterionG(outputs, targets, inputs)
-            loss_G.backward()
+            
+            # 1. 原始 Stripformer Loss (Charbonnier + Edge + Contrastive)
+            loss_original = self.criterionG(outputs, targets, inputs)
+            
+            # 2. 小波蒸餾 Loss (Wavelet KD)
+            loss_kd_wav = self.wavelet_criterion(outputs, teacher_outputs)
+            
+            # 3. 加總並反向傳播
+            loss_total = loss_original + self.weight_kd_wav * loss_kd_wav
+            loss_total.backward()
+            
             self.optimizer_G.step()
-            self.metric_counter.add_losses(loss_G.item())
+            
+            # 紀錄總 Loss 到 Tensorboard/WandB
+            self.metric_counter.add_losses(loss_total.item())
+            
+            # 順便把詳細 Loss 傳給 WandB
+            try:
+                if wandb.run is not None:
+                    wandb.log({
+                        "Train/loss_original": loss_original.item(),
+                        "Train/loss_kd_wav": loss_kd_wav.item(),
+                    }, commit=False)
+            except:
+                pass
+
             curr_psnr, curr_ssim, img_for_vis = self.model.get_images_and_metrics(inputs, outputs, targets)
             self.metric_counter.add_metrics(curr_psnr, curr_ssim)
             tq.set_postfix(loss=self.metric_counter.loss_message())
@@ -99,6 +127,8 @@ class Trainer:
                 break
         tq.close()
         self.metric_counter.write_to_tensorboard(epoch)
+        train_loss = np.mean(self.metric_counter.metrics['G_loss'])
+        wandb.log({'Train/G_loss': train_loss, 'epoch': epoch})
 
     def _validate(self, epoch):
         self.metric_counter.clear()
@@ -121,6 +151,10 @@ class Trainer:
                     break
         tq.close()
         self.metric_counter.write_to_tensorboard(epoch, validation=True)
+        val_psnr = np.mean(self.metric_counter.metrics['PSNR'])
+        val_ssim = np.mean(self.metric_counter.metrics['SSIM'])
+        print(f'\n🌊 [Epoch {epoch}] Validation PSNR: {val_psnr:.4f} | SSIM: {val_ssim:.4f}\n')
+        wandb.log({'Val/PSNR': val_psnr, 'Val/SSIM': val_ssim, 'epoch': epoch})
 
 
     def _get_optim(self, params):
@@ -145,11 +179,33 @@ class Trainer:
         self.optimizer_G = self._get_optim(filter(lambda p: p.requires_grad, self.netG.parameters()))
         self.scheduler_G = self._get_scheduler(self.optimizer_G)
 
+        # === 🌟 加入 Teacher 模型 (Stripformer 魔改版) ===
+        print("===> Building Teacher Model for Wavelet KD...")
+        self.teacher_model = get_nets(self.config['model'])
+        self.teacher_model.cuda()
+        
+        # 載入你剛剛下載的老師預訓練權重
+        teacher_weight_path = './pretrained_models/Stripformer_gopro.pth'
+        if os.path.exists(teacher_weight_path):
+            self.teacher_model.load_state_dict(torch.load(teacher_weight_path))
+        else:
+            print(f"⚠️ 找不到老師權重: {teacher_weight_path}")
+            
+        self.teacher_model.eval()
+        for param in self.teacher_model.parameters():
+            param.requires_grad = False
+
+        # 初始化 Wavelet KD Loss
+        from models.losses import WaveletKDLoss
+        self.wavelet_criterion = WaveletKDLoss().cuda()
+        self.weight_kd_wav = 0.5 # 設定與 Uformer 相同的權重
+
 
 if __name__ == '__main__':
     with open('config/config_Stripformer_gopro.yaml', 'r') as f:
         config = yaml.safe_load(f)
     # setup
+    wandb.init(project='Uformer_Distill_Project', name=f"Stripformer_{config['experiment_desc']}")
     torch.backends.cudnn.enabled = True
     torch.backends.cudnn.benchmark = True
 
