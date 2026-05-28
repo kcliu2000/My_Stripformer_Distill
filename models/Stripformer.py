@@ -329,45 +329,36 @@ class Inter_SA(nn.Module):
         return x
 
 class Stripformer(nn.Module):
-    def __init__(self):
-        super(Stripformer, self).__init__()
+    class Stripformer(nn.Module):
+        # 👇 新增 num_blocks 參數，預設為老師的 12 層
+        def __init__(self, num_blocks=12): 
+            super(Stripformer, self).__init__()
 
-        self.encoder = Embeddings()
-        head_num = 5
-        dim = 320
-        self.Trans_block_1 = Intra_SA(dim, head_num)
-        self.Trans_block_2 = Inter_SA(dim, head_num)
-        self.Trans_block_3 = Intra_SA(dim, head_num)
-        self.Trans_block_4 = Inter_SA(dim, head_num)
-        self.Trans_block_5 = Intra_SA(dim, head_num)
-        self.Trans_block_6 = Inter_SA(dim, head_num)
-        self.Trans_block_7 = Intra_SA(dim, head_num)
-        self.Trans_block_8 = Inter_SA(dim, head_num)
-        self.Trans_block_9 = Intra_SA(dim, head_num)
-        self.Trans_block_10 = Inter_SA(dim, head_num)
-        self.Trans_block_11 = Intra_SA(dim, head_num)
-        self.Trans_block_12 = Inter_SA(dim, head_num)
-        self.decoder = Embeddings_output()
+            self.encoder = Embeddings()
+            head_num = 5
+            dim = 320
+            self.num_blocks = num_blocks
 
+            # 👇 使用 setattr 動態註冊模組，這樣能完美保留原本 'Trans_block_X' 的命名，確保老師權重可以順利載入！
+            for i in range(1, num_blocks + 1):
+                if i % 2 != 0:
+                    setattr(self, f'Trans_block_{i}', Intra_SA(dim, head_num))
+                else:
+                    setattr(self, f'Trans_block_{i}', Inter_SA(dim, head_num))
 
-    def forward(self, x):
+            self.decoder = Embeddings_output()
 
-        hx, residual_1, residual_2 = self.encoder(x)
-        hx = self.Trans_block_1(hx)
-        hx = self.Trans_block_2(hx)
-        hx = self.Trans_block_3(hx)
-        hx = self.Trans_block_4(hx)
-        hx = self.Trans_block_5(hx)
-        hx = self.Trans_block_6(hx)
-        hx = self.Trans_block_7(hx)
-        hx = self.Trans_block_8(hx)
-        hx = self.Trans_block_9(hx)
-        hx = self.Trans_block_10(hx)
-        hx = self.Trans_block_11(hx)
-        hx = self.Trans_block_12(hx)
-        hx = self.decoder(hx, residual_1, residual_2)
+        def forward(self, x):
+            hx, residual_1, residual_2 = self.encoder(x)
+        
+            # 👇 動態呼叫對應數量的 Block
+            for i in range(1, self.num_blocks + 1):
+                block = getattr(self, f'Trans_block_{i}')
+                hx = block(hx)
+            
+            out = self.decoder(hx, residual_1, residual_2)
 
-        return hx + x
+            return out
 
 
 

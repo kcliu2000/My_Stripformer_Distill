@@ -1,6 +1,39 @@
 ---
-experiment_desc: Stripformer_gopro
+# ==========================================
+# 🌟 實驗名稱 (WandB 顯示名稱)
+# ==========================================
+experiment_desc: Stripformer_Student_ExpC_WaveletKD
 
+# ==========================================
+# 🌟 知識蒸餾 (KD) 雙引擎控制器
+# ==========================================
+# kd_type 選項: 
+#   - 'None'    : 不使用蒸餾 (純 Train)
+#   - 'Output'  : ExpB (只算 L1 像素對齊)
+#   - 'Wavelet' : ExpC (L1 像素對齊 + Wavelet 高頻對齊)
+kd_type: 'Wavelet'    
+weight_kd_out: 0.5    # Output KD (L1) 的 Loss 權重
+weight_kd_wav: 0.5    # Wavelet KD 的 Loss 權重
+
+# ==========================================
+# 🌟 學生模型設定 (Student) - 輕量化版本
+# ==========================================
+model:
+  g_name: Stripformer
+  content_loss: Stripformer_Loss
+  num_blocks: 6   # 👈 學生砍半：3個 Intra + 3個 Inter
+
+# ==========================================
+# 🌟 老師模型設定 (Teacher) - 滿血版
+# ==========================================
+teacher_model:
+  g_name: Stripformer
+  num_blocks: 12  # 👈 老師維持 12 層滿血狀態
+  
+
+# ==========================================
+# 資料集與訓練參數
+# ==========================================
 train:
   files_a: ./datasets/GoPro/train/blur/**/*.png
   files_b: ./datasets/GoPro/train/sharp/**/*.png
@@ -20,10 +53,6 @@ val:
   preload: *PRELOAD
   preload_size: *PRELOAD_SIZE
   bounds: [0, 1]
-
-model:
-  g_name: Stripformer
-  content_loss: Stripformer_Loss
 
 num_epochs: 1000
 train_batches_per_epoch: 2103
