@@ -131,34 +131,31 @@ def get_loss(model):
     return content_loss
 
     
-class WaveletKDLoss(nn.Module):
-    def __init__(self):
-        super(WaveletKDLoss, self).__init__()
-        # 手刻 Haar Wavelet 的四個濾波器 (LL, HL, LH, HH)
-        h0 = 1.0 / 2.0
-        h1 = [h0, h0]
-        g1 = [h0, -h0]
-        
-        filter_ll = torch.tensor([[h1[0]*h1[0], h1[0]*h1[1]], [h1[1]*h1[0], h1[1]*h1[1]]])
-        filter_hl = torch.tensor([[h1[0]*g1[0], h1[0]*g1[1]], [h1[1]*g1[0], h1[1]*g1[1]]])
-        filter_lh = torch.tensor([[g1[0]*h1[0], g1[0]*h1[1]], [g1[1]*h1[0], g1[1]*h1[1]]])
-        filter_hh = torch.tensor([[g1[0]*g1[0], g1[0]*g1[1]], [g1[1]*g1[0], g1[1]*g1[1]]])
-        
-        filters = torch.stack([filter_ll, filter_hl, filter_lh, filter_hh]).unsqueeze(1)
+class HaarWaveletKDLoss(torch.nn.Module):
+    def __init__(self, high_freq_weight=2.0):
+        super(HaarWaveletKDLoss, self).__init__()
+        self.hf_weight = high_freq_weight
+        h0 = torch.tensor([[1/2, 1/2], [1/2, 1/2]]).view(1, 1, 2, 2)
+        h1 = torch.tensor([[1/2, 1/2], [-1/2, -1/2]]).view(1, 1, 2, 2)
+        h2 = torch.tensor([[1/2, -1/2], [1/2, -1/2]]).view(1, 1, 2, 2)
+        h3 = torch.tensor([[1/2, -1/2], [-1/2, 1/2]]).view(1, 1, 2, 2)
+        # 疊加並複製給 RGB 三個通道 (形狀: [12, 1, 2, 2])
+        filters = torch.cat([h0, h1, h2, h3], dim=0).repeat(3, 1, 1, 1)
         self.register_buffer('filters', filters)
-        self.criterion = nn.L1Loss()
 
-    def forward(self, pred, target):
-        loss = 0
-        # 針對 RGB 三個通道分別做小波轉換並計算 L1 Loss
-        for c in range(pred.size(1)):
-            pred_c = pred[:, c:c+1, :, :]
-            target_c = target[:, c:c+1, :, :]
-            
-            # 使用 stride=2 進行下採樣頻率拆解
-            pred_wav = F.conv2d(pred_c, self.filters, stride=2)
-            target_wav = F.conv2d(target_c, self.filters, stride=2)
-            
-            loss += self.criterion(pred_wav, target_wav)
-            
-        return loss / pred.size(1)
+    def forward(self, student_img, teacher_img):
+        # 使用 groups=3 進行高效小波轉換
+        stu_wav = F.conv2d(student_img, self.filters, stride=2, groups=3)
+        tea_wav = F.conv2d(teacher_img, self.filters, stride=2, groups=3)
+        
+        # 計算 L1 絕對誤差矩陣
+        diff = torch.abs(stu_wav - tea_wav)
+        
+        # 建立權重矩陣：預設所有頻帶都乘上高頻權重 (hf_weight)
+        weights = torch.ones_like(diff) * self.hf_weight
+        
+        # 🚨 關鍵修正：精準挑出 R, G, B 的 LL 頻帶 (索引 0, 4, 8)，將權重設回 1.0
+        weights[:, [0, 4, 8], :, :] = 1.0 
+        
+        # 回傳加權後的平均誤差
+        return torch.mean(diff * weights)
